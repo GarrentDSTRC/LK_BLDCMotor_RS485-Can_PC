@@ -12,7 +12,7 @@ lib=ctypes.CDLL(r"./encoding_LK_Can.dll")
 
 T_LIMIT=100
 
-P_MIN =-355.99
+P_MIN =0
 P_MAX =355.99
 V_MIN =-30
 V_MAX =30
@@ -22,7 +22,8 @@ POSITION_ORDER= b"\x02\x02\x0B\x04\x9C\x7E\x03"
 # Python representation of the C struct re_val
 class ReVal(Structure):
     _fields_ = [("Lh", c_uint64),("Ll", c_uint64)]
-
+class Read(Structure):
+    _fields_ = [("P", c_uint16),("V", c_uint16),("I",c_uint16),("T",c_uint8)]
 class motor():
 
     def __init__(self, motor_id, com1='com11',com2='com9', bps1=115200,bps2=115200):
@@ -49,6 +50,10 @@ class motor():
 
         self.data=[]
         self.crc=[]
+        self.P=[]
+        self.I=[]
+        self.V=[]
+        self.T=[]
 
     def motor_enable(self):
         try:
@@ -88,68 +93,27 @@ class motor():
             t.start()
 
     def motor_control(self, MotorParam):
-        if MotorParam.shape[0]==1:
+        if np.ndim(MotorParam)==1:
             Command=MotorParam[0]
             Pdes=MotorParam[1]
             Ddes = MotorParam[2]
             if Command==0:
+                if Pdes<0:
+                    Pdes=-Pdes
+                    dir=1
+                else:
+                    dir=0
                 Pdes=np.min([ np.max([Pdes,P_MIN]),P_MAX])
 
                 lib.packmsg.restype=ReVal
-                pacmsg=lib.packmsg ( c_char(b'p'),c_ubyte(int(self.id)),c_ubyte(int(Ddes)),c_ushort(int(Pdes)) )
+                a=lib.test(1)
+                pacmsg=lib.packmsg( c_int(int(Command)),c_bool(dir),c_int(int(self.id)),c_int(int(Ddes)),c_int(int(Pdes*100)) )
 
-            report=pacmsg.L1.to_bytes(8,byteorder="big")+pacmsg.L3.to_bytes(2,byteorder="big")
+                report=pacmsg.Lh.to_bytes(8,byteorder="big")
+                return report
      
 
-    def Pctrl(self, MotorParam):
-        ID=MotorParam[0,:,0]
-        Pdes=MotorParam[1,:,0]
-        Ddes = MotorParam[2, :, 0]
-
-        #limit data to be within bounds
-        sent=[]
-
-        for i in range(T_LIMIT):
-            Pdes[i]=np.min([ np.max([Pdes[i],P_MIN]),P_MAX])
-
-            lib.packmsg.restype=ReVal
-            pacmsg=lib.packmsg ( c_char(b'p'),c_ubyte(int(self.id)),c_ubyte(int(Ddes)),c_ushort(int(Pdes)) )
-
-            report=pacmsg.L1.to_bytes(8,byteorder="big")+pacmsg.L3.to_bytes(2,byteorder="big")
-            #report=struct.pack(">QH",pacmsg.L1,pacmsg.L3)
-
-            #report=b"\x3E\xA3\x01\x08\xEA\x00\x00\x00\x00\x00\x00\x00\x00\x00 "
-            print(report.hex(),len(report))
-            
-            
-            self.serial_uart.write(report)
-            time.sleep(0.1)
-
-
-    def motor_Pctrl_can(self,MotorPara):
-        # pdes=np.linspace(0,95.5,100)
-        ID=MotorPara[0,:,0]
-        Pdes=MotorPara[1,:,0]
-        Vdes = MotorPara[2, :, 0]
-        tff = MotorPara[3, :, 0]
-        kd = MotorPara[4, :, 0]
-        kp = MotorPara[5, :, 0]
-
-        #limit data to be within bounds
-        sent=[]
-        for i in range(T_LIMIT):
-            Pdes[i]=np.min([ np.max([Pdes[i],P_MIN]),P_MAX])
-            Vdes[i] = np.min([ np.max([Vdes[i], V_MIN]), V_MAX])
-
-
-            report=(int(Pdes[i])<<48)+(int(Vdes[i])<<36)+(int(kp[i])<<24)+(int(kd[i])<<12)+int(tff[i])
-            sent.append(report)
-            rbi=struct.pack(">Q", report)
-
-            self.serial_can.write(rbi)
-
-            time.sleep(0.1)
-
+  
     def  float_to_uint(self, x,  x_min,  x_max, bits):
         span = x_max - x_min
         if(x < x_min):
@@ -167,35 +131,22 @@ class motor():
         while True:
             n = self.serial_uart.inWaiting()  # 等待数据的到来，并得到数据的长度
             if n:  # 如果有数�??
-                begin = self.serial_uart.read(1)  # 读取n位数�??
-                if begin=='02':
-                    datalen = self.serial_uart.read(1)
-                    data=self.serial_uart.read(int(datalen))
-                    CRC16=self.serial_uart.read(2)
-                    end=self.serial_uart.read(1)
-                    if end=='03':
-                        self.data.append(data)
-                        self.crc.append(CRC16)
-                    else: print('read data error')
 
-                """
-                s = [hex(x) for x in bytes(n)]
-                id=(int(s[0],16)<<4)+(int(s[1],16))
-                p=(int(s[2],16)<<4)+(int(s[3],16))
-                v=(int(s[4],16)<<12)+(int(s[5],16)<<8)+(int(s[6],16)<<4)+(int(s[7],16))
-                t=(int(s[8],16)<<8)+(int(s[9],16)<<4)+(int(s[10],16))
-
-                p=self.uint_to_float(p,P_MIN,P_MAX,16)
-                v = self.uint_to_float(v, V_MIN, V_MAX, 12)
-                t = self.uint_to_float(t, T_MIN, T_MAX, 12)
-
-                print("P:",p,"\nV:",v,"\nT:",t)
-                """
+                msg = self.serial_uart.read(1)  # 读取n位数�??
+                self.data.append(Read.P)
+                lib.motorRead.restype=Read
+                Read=lib.motorRead( c_longlong(msg) )
+                self.P.append(Read.P)
+                self.I.append(Read.I)
+                self.V.append(Read.V)
+                self.T.append(Read.T)
             time.sleep(0.5)
+    def motor_save(self):
+        np.savetxt(r".\saveData%d.csv"(self.id),self.data)
 
 
 if __name__ == '__main__':
-    Motorlist=[0,1,2]
+    Motorlist=[1,2,3]
     MyMotor=[]
     for i in Motorlist:
         MyMotor.append(motor(i))
@@ -203,8 +154,8 @@ if __name__ == '__main__':
     MotorPara =np.zeros([len(Motorlist),3,T_LIMIT]) #ID,[CMD VALUEX2]
 
     Mode=0*np.ones(T_LIMIT) #0-P control
-    Pdes1 = np.linspace(0, 300, T_LIMIT)
-    Pdes2 = 0.8*np.linspace(0, 300, T_LIMIT)
+    Pdes1 = np.linspace(10, 300, T_LIMIT)
+    Pdes2 = 0.8*np.linspace(10, 300, T_LIMIT)
     Ddes=np.ones(T_LIMIT)*256
     V1=np.array([Mode,Pdes1,Ddes])
 

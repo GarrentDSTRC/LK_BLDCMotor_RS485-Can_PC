@@ -3,79 +3,60 @@
 #include <stdio.h>
 #include "encoding_LK.h"
 using namespace std;
-
+//尽量用uint_16
  extern "C"
 {
-struct re_val packmsg(char cmd, uint8_t id, uint8_t d,uint16_t value);
+struct re_val packmsg(uint16_t cmd,bool dir, uint8_t id,uint16_t v,uint16_t Pvalue);
+struct decoder motorRead(uint64_t Read);
 } 
-
-uint8_t uart1TxDataSize=0;
+struct decoder{
+	uint16_t P=0;
+	uint16_t V=0;
+	uint16_t I=0;
+	uint8_t T=0;
+};
 
 struct re_val {
     uint64_t Lh=0;
 	uint64_t Ll=0;
 };
 
-int ustrcat(unsigned char *msg,unsigned char *buf,int point,int len){
-    for (int i=0;i<(len);i++)
-        {*(msg+point)=*(buf+i);
-        point++;} //指向没写的空位
-    return point;
+struct decoder motorRead(uint64_t Read){
+	struct decoder d;
+	d.P=((0xFF&Read)<<8)+(Read>>8)&0xFF;
+	Read=Read>>16;
+	d.V=((0xFF&Read)<<8)+(Read>>8)&0xFF;
+	Read=Read>>16;
+	d.I=((0xFF&Read)<<8)+(Read>>8)&0xFF;
+	Read=Read>>16;
+	d.T=0xFF&Read;
+	return d;
 }
 
-void control_PackCmd(uint8_t *buffer, uint8_t cmd, uint8_t id, uint8_t size, uint8_t *data)
-{
-	uint8_t i = 0;
-
-	buffer[0] = CMD_HEAD;
-	buffer[1] = cmd;
-	buffer[2] = id;
-	buffer[3] = size;
-	buffer[4] = 0;	// 需要先清0
-	for (i=0; i<4; i++)
-		buffer[4] += buffer[i];
-	
-	if (size != 0)
-	{
-		buffer[LEAST_FRAME_SIZE+size] = 0;	// 需要先清0
-		for (i=0; i<size; i++)	// 复制数据并计算校验值
-		{
-			buffer[LEAST_FRAME_SIZE+i] = data[i];
-			buffer[LEAST_FRAME_SIZE+size] += buffer[LEAST_FRAME_SIZE+i];
-		}
-		uart1TxDataSize = i + LEAST_FRAME_SIZE + 1;	// 需要发送的数据总长度
-	}
-	else
-		uart1TxDataSize = LEAST_FRAME_SIZE ;	// 需要发送的数据总长度
-}
-
-struct re_val packmsg(char cmd, uint8_t id, uint16_t v,uint16_t Pvalue){
+struct re_val packmsg(uint16_t cmd,bool dir, uint8_t id, uint16_t v,uint16_t Pvalue){
     struct re_val r;
-    uint8_t dataSize = 0;	// 命令数据长度
-	int16_t openCtlData = 0;	// 开环控制数据
-	int16_t torqueCtlData = 0;	// 力矩环控制数据
-	int16_t speedCtlData = 0;	// 速度环控制数据
-	int32_t angleCtlData = 0;	// 位置环控制数据
-	uint8_t Buffer[20];
 
+	cout<<"Pvalue:"<<Pvalue<<"V:"<<v<<"dir"<<dir<<"id"<<id<<"cmd"<<cmd<<endl;
 
-	if (cmd == '0')
+	if (cmd == 0)
 	{
-		if (Pvalue<0)
-			{r.Lh=(0xA601<<8)&v;
-			Pvalue=-Pvalue;}
+		if (dir==1)
+			r.Lh=(0xA601<<16)+v&0xFF+(v>>8)&0xFF;
 		else
-			r.Lh=(0xA600<<8)&v;
-		r.Ll=Pvalue<<8;
+			r.Lh=(0xA600<<16)+v&0xFF+(v>>8)&0xFF;
+		r.Lh=(r.Lh<<32)+(( ((Pvalue&0xFF)<<8) +(Pvalue>>8) )<<16);
 	}
     return r;
 }
 
 int main(){
    unsigned char b[4]={0x00,0x00,0x00,0xbe};
-    struct re_val r=packmsg('p',1,0,30000);
-    cout<<hex<<r.L1<<endl<<r.L3;
+    struct re_val r=packmsg(0,0,0,256,300);
+	uint16_t A;
+	A=(0xFFFF& r.Lh);
+    cout<<hex<<r.Lh<<endl<<(0xFFFF&r.Lh);
+
 
  return 0;
 }
-//g++ -o encoding_LK.dll -shared encoding_LK.cpp 145531359052480133 939548549
+//g++ -o encoding_LK_Can.dll -shared encoding_LK_Can.cpp 145531359052480133 939548549
