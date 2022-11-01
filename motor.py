@@ -1,16 +1,18 @@
-import numpy as np
-import time
-import struct
-import serial
-import threading
-from ctypes import *
 import ctypes
+import struct
+import threading
+import time
+from ctypes import *
+from typing import OrderedDict
 
-lib=ctypes.CDLL(r"./encoding_LK.dll") 
+import numpy as np
+import serial
+
+lib=ctypes.CDLL(r"./encoding_LK_Can.dll") 
 
 T_LIMIT=100
 
-P_MIN =0
+P_MIN =-355.99
 P_MAX =355.99
 V_MIN =-30
 V_MAX =30
@@ -19,7 +21,7 @@ POSITION_ORDER= b"\x02\x02\x0B\x04\x9C\x7E\x03"
 
 # Python representation of the C struct re_val
 class ReVal(Structure):
-    _fields_ = [("L1", c_uint64),("L2", c_uint32),("L3", c_uint16)]
+    _fields_ = [("Lh", c_uint64),("Ll", c_uint64)]
 
 class motor():
 
@@ -31,14 +33,13 @@ class motor():
         self.setzero= -2
 
         # 设置串口通讯 
-
+        '''
         self.serial_uart = serial.Serial(com1, bps1)
         self.serial_uart.timeout = 0
         self.serial_uart.bytesize = 8
         self.serial_uart.stopbits = 1
         self.serial_uart.parity = "N"
 
-        '''
         self.serial_can = serial.Serial(com2, bps2)
         self.serial_can.timeout = 0
         self.serial_can.bytesize = 8
@@ -86,20 +87,33 @@ class motor():
         for t in threads:
             t.start()
 
-    def motor_Pctrl(self, MotorPara):
-        ID=MotorPara[0,:,0]
-        Pdes=MotorPara[1,:,0]
-        Ddes = MotorPara[2, :, 0]
+    def motor_control(self, MotorParam):
+        if MotorParam.shape[0]==1:
+            Command=MotorParam[0]
+            Pdes=MotorParam[1]
+            Ddes = MotorParam[2]
+            if Command==0:
+                Pdes=np.min([ np.max([Pdes,P_MIN]),P_MAX])
+
+                lib.packmsg.restype=ReVal
+                pacmsg=lib.packmsg ( c_char(b'p'),c_ubyte(int(self.id)),c_ubyte(int(Ddes)),c_ushort(int(Pdes)) )
+
+            report=pacmsg.L1.to_bytes(8,byteorder="big")+pacmsg.L3.to_bytes(2,byteorder="big")
+     
+
+    def Pctrl(self, MotorParam):
+        ID=MotorParam[0,:,0]
+        Pdes=MotorParam[1,:,0]
+        Ddes = MotorParam[2, :, 0]
 
         #limit data to be within bounds
         sent=[]
 
         for i in range(T_LIMIT):
             Pdes[i]=np.min([ np.max([Pdes[i],P_MIN]),P_MAX])
-            Pdes[i]=Pdes[i]*100
 
             lib.packmsg.restype=ReVal
-            pacmsg=lib.packmsg ( c_char(b'p'),c_ubyte(int(ID[i])),c_ubyte(int(Ddes[i])),c_ushort(int(Pdes[i])) )
+            pacmsg=lib.packmsg ( c_char(b'p'),c_ubyte(int(self.id)),c_ubyte(int(Ddes)),c_ushort(int(Pdes)) )
 
             report=pacmsg.L1.to_bytes(8,byteorder="big")+pacmsg.L3.to_bytes(2,byteorder="big")
             #report=struct.pack(">QH",pacmsg.L1,pacmsg.L3)
@@ -181,19 +195,30 @@ class motor():
 
 
 if __name__ == '__main__':
-    Motorlist=[1]
+    Motorlist=[0,1,2]
     MyMotor=[]
-    MyMotor.append(motor(Motorlist[0]))
+    for i in Motorlist:
+        MyMotor.append(motor(i))
+    
+    MotorPara =np.zeros([len(Motorlist),3,T_LIMIT]) #ID,[CMD VALUEX2]
 
-    ID=np.ones(T_LIMIT)*Motorlist[0]
-    Pdes = np.linspace(0, 300, T_LIMIT)
-    Ddes=np.ones(100)*0
+    Mode=0*np.ones(T_LIMIT) #0-P control
+    Pdes1 = np.linspace(0, 300, T_LIMIT)
+    Pdes2 = 0.8*np.linspace(0, 300, T_LIMIT)
+    Ddes=np.ones(T_LIMIT)*256
+    V1=np.array([Mode,Pdes1,Ddes])
+
+    V2=np.array([Mode,Pdes2,Ddes])
+
+    MotorPara[0,:,:]=V1
+    MotorPara[1,:,:]=V2
+    MotorPara[2,:,:]=V1
+
+    for i in range(T_LIMIT):
+        for j in range(len(Motorlist)):
+            MyMotor[j].motor_control(MotorPara[j,:,i]) 
 
 
-    MotorPara =np.array([ID,Pdes,Ddes]) #ID CMD VALUE
-    MotorPara=np.expand_dims(MotorPara, axis=2) #n个电机
-
-    MyMotor[0].motor_Pctrl(MotorPara)
 
     print(MyMotor[0].data,'\n',MyMotor[0].crc)
 
