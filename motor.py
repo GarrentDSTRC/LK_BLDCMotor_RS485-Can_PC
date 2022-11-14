@@ -17,6 +17,9 @@ P_MAX =355.99
 V_MIN =-30
 V_MAX =30
 POSITION_ORDER= b"\x02\x02\x0B\x04\x9C\x7E\x03"
+VCI_USBCAN2 = 4
+STATUS_OK = 1
+
 
 
 # Python representation of the C struct re_val
@@ -24,6 +27,84 @@ class ReVal(Structure):
     _fields_ = [("Lh", c_uint64),("Ll", c_uint64)]
 class Read(Structure):
     _fields_ = [("P", c_uint16),("V", c_uint16),("I",c_uint16),("T",c_uint8)]
+
+
+# Python for ControlCan.dll     
+class VCI_INIT_CONFIG(Structure):  
+    _fields_ = [("AccCode", c_uint),
+                ("AccMask", c_uint),
+                ("Reserved", c_uint),
+                ("Filter", c_ubyte),
+                ("Timing0", c_ubyte),
+                ("Timing1", c_ubyte),
+                ("Mode", c_ubyte)
+                ]  
+class VCI_CAN_OBJ(Structure):  
+    _fields_ = [("ID", c_uint),
+                ("TimeStamp", c_uint),
+                ("TimeFlag", c_ubyte),
+                ("SendType", c_ubyte),
+                ("RemoteFlag", c_ubyte),
+                ("ExternFlag", c_ubyte),
+                ("DataLen", c_ubyte),
+                ("Data", c_ubyte*8),
+                ("Reserved", c_ubyte*3)
+                ] 
+ 
+CanDLLName = './ControlCAN.dll' #把DLL放到对应的目录下
+canDLL = windll.LoadLibrary(r'./CANAnalysis/ControlCAN.dll')
+#Linux系统下使用下面语句，编译命令：python3 python3.8.0.py
+#canDLL = cdll.LoadLibrary('./libcontrolcan.so')
+
+print(CanDLLName)
+ 
+ret = canDLL.VCI_OpenDevice(VCI_USBCAN2, 0, 0)
+if ret == STATUS_OK:
+    print('调用 VCI_OpenDevice成功\r\n')
+if ret != STATUS_OK:
+    print('调用 VCI_OpenDevice出错\r\n')
+#初始0通道
+vci_initconfig = VCI_INIT_CONFIG(0x80000008, 0xFFFFFFFF, 0,
+                                0, 0x03, 0x1C, 0)#波特率125k，正常模式
+ret = canDLL.VCI_InitCAN(VCI_USBCAN2, 0, 0, byref(vci_initconfig))
+if ret == STATUS_OK:
+    print('调用 VCI_InitCAN1成功\r\n')
+if ret != STATUS_OK:
+    print('调用 VCI_InitCAN1出错\r\n')
+
+ret = canDLL.VCI_StartCAN(VCI_USBCAN2, 0, 0)
+if ret == STATUS_OK:
+    print('调用 VCI_StartCAN1成功\r\n')
+if ret != STATUS_OK:
+    print('调用 VCI_StartCAN1出错\r\n')
+
+#初始1通道
+ret = canDLL.VCI_InitCAN(VCI_USBCAN2, 0, 1, byref(vci_initconfig))
+if ret == STATUS_OK:
+    print('调用 VCI_InitCAN2 成功\r\n')
+if ret != STATUS_OK:
+    print('调用 VCI_InitCAN2 出错\r\n')
+
+ret = canDLL.VCI_StartCAN(VCI_USBCAN2, 0, 1)
+if ret == STATUS_OK:
+    print('调用 VCI_StartCAN2 成功\r\n')
+if ret != STATUS_OK:
+    print('调用 VCI_StartCAN2 出错\r\n')
+
+# Python for ControlCan.dll END    
+
+    
+class VCI_CAN_OBJ_ARRAY(Structure):
+    _fields_ = [('SIZE', ctypes.c_uint16), ('STRUCT_ARRAY', ctypes.POINTER(VCI_CAN_OBJ))]
+
+    def __init__(self,num_of_structs):
+                                                                 #这个括号不能少
+        self.STRUCT_ARRAY = ctypes.cast((VCI_CAN_OBJ * num_of_structs)(),ctypes.POINTER(VCI_CAN_OBJ))#结构体数组
+        self.SIZE = num_of_structs#结构体长度
+        self.ADDR = self.STRUCT_ARRAY[0]#结构体数组地址  byref()转c地址
+
+    
+
 class motor():
 
     def __init__(self, motor_id, com1='com11',com2='com9', bps1=115200,bps2=115200):
@@ -106,10 +187,28 @@ class motor():
                 Pdes=np.min([ np.max([Pdes,P_MIN]),P_MAX])
 
                 lib.packmsg.restype=ReVal
-                a=lib.test(1)
+                #a=lib.test(1)
                 pacmsg=lib.packmsg( c_int(int(Command)),c_bool(dir),c_int(int(self.id)),c_int(int(Ddes)),c_int(int(Pdes*100)) )
 
                 report=pacmsg.Lh.to_bytes(8,byteorder="big")
+
+                #HeadFlag=b'0x140'+str.encode("{:02x}".format(self.id))
+                HeadFlag=320+self.id
+
+                #通道1发送数据
+
+                a = (ctypes.c_ubyte*8)(*(report))
+
+                ubyte_3array = c_ubyte*3
+                b = ubyte_3array(0, 0 , 0)
+                vci_can_obj = VCI_CAN_OBJ(c_uint(HeadFlag), 0, 0, 1, 0, 0,  8, a, b)#单次发送
+                
+                ret = canDLL.VCI_Transmit(VCI_USBCAN2, 0, 0, byref(vci_can_obj), 1)
+                if ret == STATUS_OK:
+                    print('CAN1通道发送成功\r\n')
+                if ret != STATUS_OK:
+                    print('CAN1通道发送失败\r\n')
+
                 return report
      
 
@@ -128,24 +227,41 @@ class motor():
         return  float(x_int)*span/float((1<<bits)-1) + x_min
 
     def motor_read(self):
-        while True:
-            n = self.serial_uart.inWaiting()  # 等待数据的到来，并得到数据的长度
-            if n:  # 如果有数�??
+        rx_vci_can_obj = VCI_CAN_OBJ_ARRAY(2500)#结构体数组
 
-                msg = self.serial_uart.read(1)  # 读取n位数�??
-                self.data.append(Read.P)
-                lib.motorRead.restype=Read
-                Read=lib.motorRead( c_longlong(msg) )
-                self.P.append(Read.P)
-                self.I.append(Read.I)
-                self.V.append(Read.V)
-                self.T.append(Read.T)
-            time.sleep(0.5)
+        ret = canDLL.VCI_Receive(VCI_USBCAN2, 0, 1, byref(rx_vci_can_obj.ADDR), 2500, 0)
+        #print(ret)
+        while ret <= 0:#如果没有接收到数据，一直循环查询接收。
+                ret = canDLL.VCI_Receive(VCI_USBCAN2, 0, 1, byref(rx_vci_can_obj.ADDR), 2500, 0)
+        if ret > 0:#接收到一帧数据
+            print('CAN2通道接收成功\r\n')
+            print('ID：')
+            print(rx_vci_can_obj.STRUCT_ARRAY[0].ID)
+            print('DataLen：')
+            print(rx_vci_can_obj.STRUCT_ARRAY[0].DataLen)
+            print('Data：')
+            print(list(rx_vci_can_obj.STRUCT_ARRAY[0].Data))
+            # data=0
+            # for i in rx_vci_can_obj.STRUCT_ARRAY[0].Data:
+            #     data=(data<<8)+i
+            # data=struct.pack(">Q",data)
+            data=int.from_bytes(rx_vci_can_obj.STRUCT_ARRAY[0].Data,"big")
+
+            lib.motorRead.restype=Read
+            read=lib.motorRead( c_longlong(data) )
+            self.crc.append(rx_vci_can_obj.STRUCT_ARRAY[0].ID-320)
+            self.P.append(read.P)
+            self.I.append(read.I)
+            self.V.append(read.V)
+            self.T.append(read.T)
+
     def motor_save(self):
-        np.savetxt(r".\saveData%d.csv"(self.id),self.data)
+        data=np.array([self.crc,self.P,self.I,self.V,self.T])
+        np.savetxt(r".\saveData_Motor%d_PIVT.csv"%(self.id),data)
 
 
 if __name__ == '__main__':
+
     Motorlist=[1,2,3]
     MyMotor=[]
     for i in Motorlist:
@@ -168,13 +284,14 @@ if __name__ == '__main__':
     for i in range(T_LIMIT):
         for j in range(len(Motorlist)):
             MyMotor[j].motor_control(MotorPara[j,:,i]) 
+            MyMotor[j].motor_read() 
+
+    for j in range(len(Motorlist)):
+        MyMotor[j].motor_save()
 
 
-
-    print(MyMotor[0].data,'\n',MyMotor[0].crc)
-
-
-
+    #关闭
+    canDLL.VCI_CloseDevice(VCI_USBCAN2, 0) 
 
 
 

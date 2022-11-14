@@ -41,9 +41,10 @@ struct re_val packmsg(uint16_t cmd,bool dir, uint8_t id, uint16_t v,uint16_t Pva
 	if (cmd == 0)
 	{
 		if (dir==1)
-			r.Lh=(0xA601<<16)+v&0xFF+(v>>8)&0xFF;
+			r.Lh=0xA601;
 		else
-			r.Lh=(0xA600<<16)+v&0xFF+(v>>8)&0xFF;
+			r.Lh=0xA600;
+		r.Lh=(r.Lh<<16)+(v&0xFF)+((v>>8)&0xFF);
 		r.Lh=(r.Lh<<32)+(( ((Pvalue&0xFF)<<8) +(Pvalue>>8) )<<16);
 	}
     return r;
