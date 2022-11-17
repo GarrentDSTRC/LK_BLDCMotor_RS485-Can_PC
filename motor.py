@@ -10,13 +10,14 @@ import serial
 
 lib=ctypes.CDLL(r"./encoding_LK_Can.dll") 
 
-T_LIMIT=100
+T_LIMIT=40
+Period=4
 
 P_MIN =0
 P_MAX =355.99
 V_MIN =-30
 V_MAX =30
-POSITION_ORDER= b"\x02\x02\x0B\x04\x9C\x7E\x03"
+Read_ORDER= b"\x9C\x00\x00\x00\x00\x00\x00\x00"
 VCI_USBCAN2 = 4
 STATUS_OK = 1
 
@@ -65,7 +66,8 @@ if ret != STATUS_OK:
     print('调用 VCI_OpenDevice出错\r\n')
 #初始0通道
 vci_initconfig = VCI_INIT_CONFIG(0x80000008, 0xFFFFFFFF, 0,
-                                0, 0x03, 0x1C, 0)#波特率125k，正常模式
+                                0, 0x00, 0x14, 0)#波特率125k，正常模式
+
 ret = canDLL.VCI_InitCAN(VCI_USBCAN2, 0, 0, byref(vci_initconfig))
 if ret == STATUS_OK:
     print('调用 VCI_InitCAN1成功\r\n')
@@ -109,6 +111,7 @@ class motor():
 
     def __init__(self, motor_id, com1='com11',com2='com9', bps1=115200,bps2=115200):
         self.id=motor_id
+        self.HeadFlag = 320 + self.id
 
         self.disable = -4
         self.enable = -3
@@ -191,25 +194,28 @@ class motor():
                 pacmsg=lib.packmsg( c_int(int(Command)),c_bool(dir),c_int(int(self.id)),c_int(int(Ddes)),c_int(int(Pdes*100)) )
 
                 report=pacmsg.Lh.to_bytes(8,byteorder="big")
+            elif Command==1:
+                Pdes=Pdes*100
+                report=b"\xA7\x00\x00\x00"+struct.pack("<i",int(Pdes))
 
-                #HeadFlag=b'0x140'+str.encode("{:02x}".format(self.id))
-                HeadFlag=320+self.id
+            #HeadFlag=b'0x140'+str.encode("{:02x}".format(self.id))
 
-                #通道1发送数据
+            print("id",self.id,"DLC",report.hex())
+            #通道1发送数据
 
-                a = (ctypes.c_ubyte*8)(*(report))
+            a = (ctypes.c_ubyte*8)(*(report))
 
-                ubyte_3array = c_ubyte*3
-                b = ubyte_3array(0, 0 , 0)
-                vci_can_obj = VCI_CAN_OBJ(c_uint(HeadFlag), 0, 0, 1, 0, 0,  8, a, b)#单次发送
-                
-                ret = canDLL.VCI_Transmit(VCI_USBCAN2, 0, 0, byref(vci_can_obj), 1)
-                if ret == STATUS_OK:
-                    print('CAN1通道发送成功\r\n')
-                if ret != STATUS_OK:
-                    print('CAN1通道发送失败\r\n')
+            ubyte_3array = c_ubyte*3
+            b = ubyte_3array(0, 0 , 0)
+            vci_can_obj = VCI_CAN_OBJ(c_uint(self.HeadFlag), 0, 0, 1, 0, 0,  8, a, b)#单次发送
 
-                return report
+            ret = canDLL.VCI_Transmit(VCI_USBCAN2, 0, 0, byref(vci_can_obj), 1)
+            if ret == STATUS_OK:
+                print('CAN1通道发送成功\r\n')
+            if ret != STATUS_OK:
+                print('CAN1通道发送失败\r\n')
+
+            return report
      
 
   
@@ -228,13 +234,21 @@ class motor():
 
     def motor_read(self):
         rx_vci_can_obj = VCI_CAN_OBJ_ARRAY(2500)#结构体数组
+        ret = canDLL.VCI_Receive(VCI_USBCAN2, 0, 0, byref(rx_vci_can_obj.ADDR), 2500, 0)
 
-        ret = canDLL.VCI_Receive(VCI_USBCAN2, 0, 1, byref(rx_vci_can_obj.ADDR), 2500, 0)
-        #print(ret)
+        a = (ctypes.c_ubyte * 8)(*(Read_ORDER))
+        ubyte_3array = c_ubyte * 3
+        b = ubyte_3array(0, 0, 0)
+
         while ret <= 0:#如果没有接收到数据，一直循环查询接收。
-                ret = canDLL.VCI_Receive(VCI_USBCAN2, 0, 1, byref(rx_vci_can_obj.ADDR), 2500, 0)
+
+                vci_can_obj = VCI_CAN_OBJ(c_uint(self.HeadFlag), 0, 0, 1, 0, 0, 8, a, b)  # 单次发送
+                ret2 = canDLL.VCI_Transmit(VCI_USBCAN2, 0, 0, byref(vci_can_obj), 1)
+
+                ret = canDLL.VCI_Receive(VCI_USBCAN2, 0, 0, byref(rx_vci_can_obj.ADDR), 2500, 0)
+
         if ret > 0:#接收到一帧数据
-            print('CAN2通道接收成功\r\n')
+            print('CAN1通道接收成功\r\n')
             print('ID：')
             print(rx_vci_can_obj.STRUCT_ARRAY[0].ID)
             print('DataLen：')
@@ -261,31 +275,38 @@ class motor():
 
 
 if __name__ == '__main__':
-
-    Motorlist=[1,2,3]
+    time.sleep(6)
+    Motorlist=[3,2,1]
     MyMotor=[]
     for i in Motorlist:
         MyMotor.append(motor(i))
     
-    MotorPara =np.zeros([len(Motorlist),3,T_LIMIT]) #ID,[CMD VALUEX2]
+    MotorPara =np.zeros([len(Motorlist),3,T_LIMIT*Period]) #ID,[CMD VALUEX2]
 
-    Mode=0*np.ones(T_LIMIT) #0-P control
-    Pdes1 = np.linspace(10, 300, T_LIMIT)
-    Pdes2 = 0.8*np.linspace(10, 300, T_LIMIT)
-    Ddes=np.ones(T_LIMIT)*256
-    V1=np.array([Mode,Pdes1,Ddes])
+    # Mode=0*np.ones(T_LIMIT) #0-P control
+    # Pdes1 =100* np.sin(np.linspace(0, 6.28, T_LIMIT))
+    # Pdes2 = 80* np.sin(np.linspace(0, 6.28, T_LIMIT))
+    # Vdes= np.ones(T_LIMIT) * 256
 
-    V2=np.array([Mode,Pdes2,Ddes])
+    Mode=1*np.ones(T_LIMIT*Period) #0-P INCREASE control
+    Pdes1 =np.array(([10]*int(T_LIMIT/2)+[-10]*int(T_LIMIT/2))*Period)
+    Pdes2 =0.8*Pdes1
+    Vdes= np.ones(T_LIMIT*Period) * 256
 
-    MotorPara[0,:,:]=V1
-    MotorPara[1,:,:]=V2
-    MotorPara[2,:,:]=V1
+
+    Seri1=np.array([Mode, Pdes1, Vdes])
+    Seri2=np.array([Mode, Pdes2, Vdes])
+
+    MotorPara[0,:,:]=Seri2
+    MotorPara[1,:,:]=Seri2
+    MotorPara[2,:,:]=Seri1
 
     for i in range(T_LIMIT):
         for j in range(len(Motorlist)):
-            MyMotor[j].motor_control(MotorPara[j,:,i]) 
-            MyMotor[j].motor_read() 
-
+            MyMotor[j].motor_control(MotorPara[j,:,i])
+            time.sleep(0.1)
+            MyMotor[j].motor_read()
+    print("process over")
     for j in range(len(Motorlist)):
         MyMotor[j].motor_save()
 
