@@ -18,6 +18,7 @@ P_MAX =355.99
 V_MIN =-30
 V_MAX =30
 Read_ORDER= b"\x9C\x00\x00\x00\x00\x00\x00\x00"
+SetZero=b"\x91\x00\x00\x00\x00\x00\x00\x00"
 VCI_USBCAN2 = 4
 STATUS_OK = 1
 
@@ -147,14 +148,21 @@ class motor():
 
     def motor_disable(self):
             self.serial_uart.write(struct.pack(">ii", -4,self.disable))
-    '''
+
     def motor_setzero(self):
-        try:
-            #self.serial_can.write(struct.pack(">ii", -4,self.setzero))
-            self.serial_uart.write(SETZERO_UART)
-        except:
-            print('cant write motor_setzero')
-    '''
+        a = (ctypes.c_ubyte * 8)(*(SetZero))
+        ubyte_3array = c_ubyte * 3
+        b = ubyte_3array(0, 0, 0)
+
+        vci_can_obj = VCI_CAN_OBJ(c_uint(self.HeadFlag), 0, 0, 1, 0, 0, 8, a, b)  # 单次发送
+        ret = canDLL.VCI_Transmit(VCI_USBCAN2, 0, 0, byref(vci_can_obj), 1)
+        if ret == STATUS_OK:
+            print('设置零点成功\r\n')
+        if ret != STATUS_OK:
+            print('设置零点失败\r\n')
+
+
+
 
 
     def motor_sent(self,mode,MotorPara):
@@ -279,19 +287,21 @@ if __name__ == '__main__':
     Motorlist=[3,2,1]
     MyMotor=[]
     for i in Motorlist:
-        MyMotor.append(motor(i))
+        moto=motor(i)
+        #moto.motor_setzero()
+        MyMotor.append(moto)
     
     MotorPara =np.zeros([len(Motorlist),3,T_LIMIT*Period]) #ID,[CMD VALUEX2]
 
-    # Mode=0*np.ones(T_LIMIT) #0-P control
-    # Pdes1 =100* np.sin(np.linspace(0, 6.28, T_LIMIT))
-    # Pdes2 = 80* np.sin(np.linspace(0, 6.28, T_LIMIT))
-    # Vdes= np.ones(T_LIMIT) * 256
+    Mode=0*np.ones(T_LIMIT*Period) #0-P control
+    Pdes1 =10* np.sin(np.linspace(0, 6.28*Period, T_LIMIT*Period))
+    Pdes2 = 8* np.sin(np.linspace(0, 6.28*Period, T_LIMIT*Period))
+    Vdes= np.ones(T_LIMIT*Period) * 50
 
-    Mode=1*np.ones(T_LIMIT*Period) #0-P INCREASE control
-    Pdes1 =np.array(([10]*int(T_LIMIT/2)+[-10]*int(T_LIMIT/2))*Period)
-    Pdes2 =0.8*Pdes1
-    Vdes= np.ones(T_LIMIT*Period) * 256
+    # Mode=1*np.ones(T_LIMIT*Period) #0-P INCREASE control
+    # Pdes1 =np.array(([10]*int(T_LIMIT/2)+[-10]*int(T_LIMIT/2))*Period)
+    # Pdes2 =0.8*Pdes1
+    # Vdes= np.ones(T_LIMIT*Period) * 256
 
 
     Seri1=np.array([Mode, Pdes1, Vdes])
